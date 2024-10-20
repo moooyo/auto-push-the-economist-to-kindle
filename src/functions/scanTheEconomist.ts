@@ -1,6 +1,9 @@
 import { app, InvocationContext, Timer } from "@azure/functions";
-import { url } from "inspector";
 import { JSDOM } from 'jsdom';
+require('dotenv').config();
+
+const sql = require('mssql')
+
 const pLimit = require('p-limit');
 
 const limit = pLimit(10);
@@ -88,12 +91,45 @@ async function doScanTheEconomist(context: InvocationContext) {
         return new Book(title, version, url.toString());
     });
 
+    // remove duplicate books if version is the same
+    const uniqueEconomistBooks = economistBooks.filter((book, index, self) => self.findIndex(b => b.version === book.version) === index);
+
     context.log('Found the following Economist books:');
 
     // using context log all economistBooks. As the format 'title displayTitle version url'
-    economistBooks.forEach(book => {
+    uniqueEconomistBooks.forEach(book => {
         context.log(`${book.title} ${book.displayTitle} ${book.version} ${book.url}`);
     });
+
+
+
+    // context.log('process.env.connectionstring: ' + process.env['SqlConnectionString']);
+
+    // start to connect to the database
+    await sql.connect(process.env.SqlConnectionString);
+    context.log('Connected to the database.');
+
+    // insert all of the economistBooks to the database if the book not exist in the database
+    await insertTheEconomistBooks(context, uniqueEconomistBooks);
+}
+
+async function insertTheEconomistBooks(context: InvocationContext, books: Book[]) {
+    // insert all of the economistBooks to the database if the book not exist in the database
+    // using p-limit to limit the number of concurrent sql query to 10
+    const insertPromises = books.map(book => limit(() => insertTheEconomistBook(context, book)));
+    await Promise.all(insertPromises);
+}
+
+async function insertTheEconomistBook(context: InvocationContext, book: Book) {
+    // insert a book to the database
+    const request = new sql.Request();
+    const result = await request.query(`SELECT * FROM dbo.TheEconomist WHERE version = ${book.version}`);
+    if (result.recordset.length === 0) {
+        await request.query(`INSERT INTO TheEconomist (title, displayTitle, version, epubDownloadUrl) VALUES ('${book.title}', '${book.displayTitle}', '${book.version}', '${book.url}')`);
+        context.log(`Inserted book ${book.title} ${book.displayTitle} ${book.version} ${book.url}`);
+    } else {
+        context.log(`Book ${book.title} ${book.displayTitle} ${book.version} ${book.url} already exists.`);
+    }
 }
 
 app.timer('scanTheEconomist', {
