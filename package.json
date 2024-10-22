@@ -11,6 +11,7 @@
     "test": "echo \"No tests yet...\""
   },
   "dependencies": {
+    "@azure/communication-email": "^1.0.0",
     "@azure/functions": "^4.5.1",
     "@types/jsdom": "^21.1.7",
     "@types/mssql": "^9.1.5",

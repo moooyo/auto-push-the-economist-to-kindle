@@ -1,5 +1,8 @@
 import { app, InvocationContext, Timer } from "@azure/functions";
 import { JSDOM } from 'jsdom';
+// import book from models folder
+import { Book } from '../models/book';
+
 require('dotenv').config();
 
 const sql = require('mssql')
@@ -9,25 +12,9 @@ const pLimit = require('p-limit');
 const limit = pLimit(10);
 
 export async function scanTheEconomist(myTimer: Timer, context: InvocationContext): Promise<void> {
-    context.log('Timer function processed request.');
+    context.log('Timer function processed request. Start to scan The Economist.');
     await doScanTheEconomist(context);
 }
-
-// generate book class, include the book title, displayTitle, book version and url, version need to be number type. And displayTitle need to be title_version pattern
-class Book {
-    title: string;
-    displayTitle: string;
-    version: number;
-    url: string;
-
-    constructor(title: string, version: number, url: string) {
-        this.title = title;
-        this.version = version;
-        this.url = url;
-        this.displayTitle = `${title}_${version}`;
-    }
-}
-
 
 async function doScanTheEconomist(context: InvocationContext) {
     // Do the actual scanning here
@@ -41,9 +28,9 @@ async function doScanTheEconomist(context: InvocationContext) {
     const doc = new JSDOM(html).window.document;
     // query all item if class id match the pattern folder-row-number
     const economistFolders = doc.querySelectorAll('[id^=folder-row-]');
-    const economistFolderAItems = Array.from(economistFolders).map(folder => folder.querySelector('a'));
+    const economistFolderAItems = await Array.from(economistFolders).map(folder => folder.querySelector('a'));
     // exclude item if titles not start with te_ and get the href and convert to real url
-    const economistFolderUrls = economistFolderAItems.filter(item => item.textContent.startsWith('te_')).map(item => new URL(item.href, targetUrl))
+    const economistFolderUrls = await economistFolderAItems.filter(item => item.textContent.startsWith('te_')).map(item => new URL(item.href, targetUrl))
     //const economistFolderUrls = economistFolderAItems.filter(item => item.textContent.startsWith('te_')).map(item => item.href);
 
     // using context.log to log all economistFolderUrls, as following format 'href'
@@ -57,7 +44,7 @@ async function doScanTheEconomist(context: InvocationContext) {
     const economistFolderHtmls = await Promise.all(economistFolderUrls.map(url => limit(() => fetch(url).then(response => response.text()))));
 
     // Get book url from economistFolderHtmls, it exist in a tag with title include epub and class include Link-Primary. The result need to be a object list which include the url link and the text for each a tag
-    const economistBookUrls = economistFolderHtmls.map(html => {
+    const economistBookUrls = await economistFolderHtmls.map(html => {
         const doc = new JSDOM(html).window.document;
         const aTags = Array.from(doc.querySelectorAll('a'));
         return aTags.filter(a => a.title.includes('epub') && a.classList.contains('Link--primary')).map(a => ({ href: a.href, text: a.textContent, url: new URL(a.href, targetUrl) }));
@@ -73,7 +60,7 @@ async function doScanTheEconomist(context: InvocationContext) {
     //const economistBookRawHTMLs = await Promise.all(economistBookUrls.map(url => fetch(url.href).then(response => response.text().then(html => ({ html, text: url.text })))));
     const economistBookRawHTMLs = await Promise.all(economistBookUrls.map(url => limit(() => fetch(url.url).then(response => response.text().then(html => ({ html, text: url.text }))))));
     
-    const economistBookRawLinks = economistBookRawHTMLs.map(html => {
+    const economistBookRawLinks = await economistBookRawHTMLs.map(html => {
         const doc = new JSDOM(html.html).window.document;
         const aTags = Array.from(doc.querySelectorAll('a'));
         return aTags.filter(a => a.querySelector('span')?.textContent === 'Raw').map(a => ({ href: a.href, text: html.text, url: new URL(a.href, targetUrl) }));
@@ -83,7 +70,7 @@ async function doScanTheEconomist(context: InvocationContext) {
 
     // construct book object from economistBookRawUrls. Title = the economist. text pattern = 'TheEconomist.YYYY.MM.DD.epub'. version = YYYYMMDD. url = href
     const regex = /\b(\d{4}\.\d{2}\.\d{2})\b/;
-    const economistBooks = economistBookRawLinks.map(item => {
+    const economistBooks = await economistBookRawLinks.map(item => {
         const title = 'The Economist';
         const match = item.text.match(regex);
         const version = parseInt(match[1].split('.').join(''));
@@ -101,10 +88,6 @@ async function doScanTheEconomist(context: InvocationContext) {
         context.log(`${book.title} ${book.displayTitle} ${book.version} ${book.url}`);
     });
 
-
-
-    // context.log('process.env.connectionstring: ' + process.env['SqlConnectionString']);
-
     // start to connect to the database
     await sql.connect(process.env.SqlConnectionString);
     context.log('Connected to the database.');
@@ -116,7 +99,7 @@ async function doScanTheEconomist(context: InvocationContext) {
 async function insertTheEconomistBooks(context: InvocationContext, books: Book[]) {
     // insert all of the economistBooks to the database if the book not exist in the database
     // using p-limit to limit the number of concurrent sql query to 10
-    const insertPromises = books.map(book => limit(() => insertTheEconomistBook(context, book)));
+    const insertPromises = await books.map(book => limit(() => insertTheEconomistBook(context, book)));
     await Promise.all(insertPromises);
 }
 
@@ -132,8 +115,8 @@ async function insertTheEconomistBook(context: InvocationContext, book: Book) {
     }
 }
 
-app.timer('scanTheEconomist', {
-    schedule: '0 * * */1 * *',
-    runOnStartup: true,
-    handler: scanTheEconomist
-});
+// app.timer('scanTheEconomist', {
+//     schedule: '0 * * */1 * *',
+//     runOnStartup: true,
+//     handler: scanTheEconomist
+// });
